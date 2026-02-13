@@ -1,6 +1,6 @@
 """Tests for prompt template formatting."""
 
-from mnemonic.prompts import build_prompt, format_context_v1, format_context_v2
+from mnemonic.prompts import build_prompt, format_context_v1, format_context_v2, _format_choices
 from mnemonic.types import RecallResult
 
 
@@ -93,3 +93,33 @@ def test_build_prompt_empty_memories() -> None:
     )
     assert "No context?" in prompt
     assert "A) Unknown" in prompt
+
+
+def test_format_choices_adds_prefixes() -> None:
+    """Plain text choices should get letter prefixes added."""
+    result = _format_choices(["20 May 2023", "10 May 2023", "6 May 2023"])
+    assert "A) 20 May 2023" in result
+    assert "B) 10 May 2023" in result
+    assert "C) 6 May 2023" in result
+
+
+def test_format_choices_preserves_existing_prefixes() -> None:
+    """Choices already prefixed with letters should be left as-is."""
+    result = _format_choices(["A) Acme Corp", "B) Globex"])
+    assert "A) Acme Corp" in result
+    assert "B) Globex" in result
+    # Should NOT double-prefix
+    assert "A) A)" not in result
+
+
+def test_build_prompt_plain_choices() -> None:
+    """build_prompt should auto-prefix plain-text choices."""
+    prompt = build_prompt(
+        memories=SAMPLE_MEMORIES,
+        question="When did it happen?",
+        choices=["May 2023", "June 2023", "July 2023"],
+        prompt_version="v1",
+    )
+    assert "A) May 2023" in prompt
+    assert "B) June 2023" in prompt
+    assert "C) July 2023" in prompt

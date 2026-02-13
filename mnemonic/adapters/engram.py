@@ -33,20 +33,19 @@ class EngramConfig:
 
 # ── Recall output parser ───────────────────────────────────────
 
-# Matches lines like:
-# 1. [0.87] (certain) (Semantic) Alice works at Acme Corp (id: a1b2c3d4, source: Direct)
+# Matches the actual engram-mcp recall output format:
+# [0.70|certain|Direct|Semantic] Alice works at Acme Corp
 _RECALL_LINE_RE = re.compile(
-    r"^(\d+)\.\s+"  # index
-    r"\[([\d.]+)\]\s+"  # score
-    r"\(([^)]+)\)\s+"  # certainty
-    r"\(([^)]+)\)\s+"  # kind
-    r"(.+?)\s+"  # content
-    r"\(id:\s*(\w+),\s*source:\s*([^)]+)\)$"  # id + source
+    r"^\[([^|]+)\|([^|]+)\|([^|]+)\|([^]]+)\]\s+(.+)$"
 )
 
 
 def parse_recall_output(stdout: str) -> list[RecallResult]:
-    """Parse engram recall CLI output into a list of RecallResult objects."""
+    """Parse engram recall CLI output into a list of RecallResult objects.
+
+    Expected format per line:
+        [score|certainty|source|kind] content text here
+    """
     results: list[RecallResult] = []
     for line in stdout.strip().splitlines():
         line = line.strip()
@@ -57,75 +56,13 @@ def parse_recall_output(stdout: str) -> list[RecallResult]:
         if match:
             results.append(RecallResult(
                 content=match.group(5),
-                score=float(match.group(2)),
-                certainty=match.group(3).lower(),
+                score=float(match.group(1)),
+                certainty=match.group(2).lower(),
                 kind=match.group(4).lower(),
-                memory_id=match.group(6),
-                source=match.group(7),
+                source=match.group(3),
             ))
-        else:
-            # Fallback for lines where content contains parentheses
-            fallback = _parse_recall_line_fallback(line)
-            if fallback:
-                results.append(fallback)
 
     return results
-
-
-def _parse_recall_line_fallback(line: str) -> RecallResult | None:
-    """Fallback parser for recall lines that don't match the strict regex.
-
-    Strategy: extract score/certainty/kind from the known prefix structure,
-    then find content between the kind tag and the last '(id:' marker.
-    """
-    # Find "(id:" marker near the end
-    id_marker = line.rfind("(id:")
-    if id_marker == -1:
-        return None
-
-    # Extract id and source from trailer
-    trailer = line[id_marker:]
-    trailer_match = re.match(r"\(id:\s*(\w+),\s*source:\s*([^)]+)\)", trailer)
-    id_str = trailer_match.group(1) if trailer_match else ""
-    source_str = trailer_match.group(2) if trailer_match else ""
-
-    # Extract score from [X.XX]
-    score_match = re.search(r"\[([\d.]+)\]", line)
-    score = float(score_match.group(1)) if score_match else 0.0
-
-    # Extract certainty and kind from the two (...) groups
-    paren_groups: list[str] = []
-    content_start = -1
-    paren_count = 0
-    i = 0
-    while i < len(line) and paren_count < 2:
-        if line[i] == "(":
-            close = line.index(")", i)
-            paren_groups.append(line[i + 1 : close])
-            paren_count += 1
-            content_start = close + 1
-            i = close + 1
-        else:
-            i += 1
-
-    if content_start == -1 or content_start >= id_marker:
-        return None
-
-    certainty = paren_groups[0].lower() if len(paren_groups) > 0 else ""
-    kind = paren_groups[1].lower() if len(paren_groups) > 1 else ""
-    content = line[content_start:id_marker].strip()
-
-    if not content:
-        return None
-
-    return RecallResult(
-        content=content,
-        score=score,
-        certainty=certainty,
-        kind=kind,
-        memory_id=id_str,
-        source=source_str,
-    )
 
 
 # ── Adapter ────────────────────────────────────────────────────
@@ -212,7 +149,9 @@ class EngramAdapter(BaseAdapter):
     ) -> list[RecallResult]:
         """Retrieve relevant memories from engram via semantic recall."""
         stdout, _, _ = await self._run(
-            conversation_id, "recall", query, "--limit", str(top_k)
+            conversation_id, "recall", query,
+            "--limit", str(top_k),
+            "--min-age-secs", "0",
         )
         return parse_recall_output(stdout)
 

@@ -73,6 +73,23 @@ def format_context_v2(memories: list[RecallResult]) -> str:
 PROMPT_VERSIONS = {"v1", "v2"}
 
 
+def _format_choices(choices: list[str]) -> str:
+    """Format choices with letter prefixes (A, B, C, ...).
+
+    If choices already have letter prefixes like "A) ...", they're used as-is.
+    Otherwise, letter prefixes are added automatically.
+    """
+    import re
+
+    # Check if first choice already has a letter prefix
+    if choices and re.match(r"^[A-Za-z][).]\s", choices[0]):
+        return "\n".join(choices)
+
+    return "\n".join(
+        f"{chr(65 + i)}) {c}" for i, c in enumerate(choices)
+    )
+
+
 def build_prompt(
     memories: list[RecallResult],
     question: str,
@@ -84,13 +101,13 @@ def build_prompt(
     Args:
         memories: Recalled memory fragments from the adapter.
         question: The benchmark question text.
-        choices: Answer options, e.g. ["A) Acme Corp", "B) Globex", ...].
+        choices: Answer options (with or without letter prefixes).
         prompt_version: "v1" (basic) or "v2" (enriched metadata).
 
     Returns:
         Formatted prompt string ready to send to the LLM.
     """
-    choices_str = "\n".join(choices)
+    choices_str = _format_choices(choices)
 
     if prompt_version == "v2":
         context = format_context_v2(memories)
