@@ -19,7 +19,7 @@ console = Console()
 # ── Adapter / LLM registry (will grow as adapters are added) ──
 
 ADAPTERS: dict[str, str] = {
-    "engram": "mnemonic.adapters.engram.EngramAdapter (not yet implemented)",
+    "engram": "Engram memory system (CLI subprocess)",
 }
 
 LLM_PROVIDERS: dict[str, str] = {

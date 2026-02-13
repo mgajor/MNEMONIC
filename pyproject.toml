@@ -14,6 +14,7 @@ mnemonic = "mnemonic.cli:app"
 [dependency-groups]
 dev = [
     "pytest",
+    "pytest-asyncio",
     "ruff",
 ]
 
