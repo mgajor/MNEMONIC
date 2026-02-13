@@ -37,17 +37,29 @@ def test_custom_config() -> None:
 
 SAMPLE_RECALL_OUTPUT = """\
 1. [0.87] (certain) (Semantic) Alice works at Acme Corp as a senior engineer (id: a1b2c3d4, source: Direct)
-2. [0.74] (likely) (Episodic) Bob mentioned he moved to Seattle last month (id: e5f6g7h8, source: Consolidated)
-3. [0.61] (vague) (Procedural) They discussed the quarterly review process (id: i9j0k1l2, source: Inferred)
+2. [0.74] (likely) (Episodic) Bob mentioned he moved to Seattle last month (id: e5f6a7b8, source: Consolidated)
+3. [0.61] (vague) (Procedural) They discussed the quarterly review process (id: c9d0e1f2, source: Inferred)
 """
 
 
 def test_parse_recall_output_basic() -> None:
     results = parse_recall_output(SAMPLE_RECALL_OUTPUT)
     assert len(results) == 3
-    assert results[0] == "Alice works at Acme Corp as a senior engineer"
-    assert results[1] == "Bob mentioned he moved to Seattle last month"
-    assert results[2] == "They discussed the quarterly review process"
+
+    assert results[0].content == "Alice works at Acme Corp as a senior engineer"
+    assert results[0].score == 0.87
+    assert results[0].certainty == "certain"
+    assert results[0].kind == "semantic"
+    assert results[0].source == "Direct"
+    assert results[0].memory_id == "a1b2c3d4"
+
+    assert results[1].content == "Bob mentioned he moved to Seattle last month"
+    assert results[1].score == 0.74
+    assert results[1].certainty == "likely"
+
+    assert results[2].content == "They discussed the quarterly review process"
+    assert results[2].certainty == "vague"
+    assert results[2].kind == "procedural"
 
 
 def test_parse_recall_output_empty() -> None:
@@ -59,7 +71,8 @@ def test_parse_recall_output_single_line() -> None:
     line = "1. [0.95] (certain) (Semantic) Hello world (id: abcd1234, source: Direct)"
     results = parse_recall_output(line)
     assert len(results) == 1
-    assert results[0] == "Hello world"
+    assert results[0].content == "Hello world"
+    assert results[0].score == 0.95
 
 
 def test_parse_recall_with_parentheses_in_content() -> None:
@@ -67,7 +80,9 @@ def test_parse_recall_with_parentheses_in_content() -> None:
     line = "1. [0.80] (likely) (Episodic) Alice said (laughing) that she loved it (id: abcd1234, source: Direct)"
     results = parse_recall_output(line)
     assert len(results) == 1
-    assert "Alice said (laughing) that she loved it" in results[0]
+    assert "Alice said (laughing) that she loved it" in results[0].content
+    assert results[0].score == 0.80
+    assert results[0].certainty == "likely"
 
 
 # ── Fallback parser tests ──────────────────────────────────────
@@ -77,7 +92,10 @@ def test_fallback_parser_with_parens() -> None:
     line = "1. [0.80] (likely) (Episodic) Alice said (laughing) that she loved it (id: abcd1234, source: Direct)"
     result = _parse_recall_line_fallback(line)
     assert result is not None
-    assert "Alice said (laughing) that she loved it" in result
+    assert "Alice said (laughing) that she loved it" in result.content
+    assert result.score == 0.80
+    assert result.certainty == "likely"
+    assert result.kind == "episodic"
 
 
 def test_fallback_parser_no_id_marker() -> None:

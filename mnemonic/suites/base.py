@@ -11,6 +11,7 @@ from rich.progress import Progress, SpinnerColumn, TextColumn, BarColumn, TaskPr
 
 from mnemonic.adapters.base import BaseAdapter
 from mnemonic.llm.base import BaseLLMProvider
+from mnemonic.prompts import build_prompt
 from mnemonic.scoring.scorer import Scorer
 from mnemonic.types import (
     BenchmarkResult,
@@ -24,14 +25,28 @@ from mnemonic.types import (
 console = Console()
 
 
-def load_locomo_dataset(path: Path) -> Dataset:
-    """Load a LoCoMo-MC10 formatted JSON dataset.
+# ── Dataset loading ─────────────────────────────────────────────
 
-    Expected format: list of objects, each with question_id, question,
-    question_type, choices, correct_choice_index, haystack_sessions,
-    and haystack_session_datetimes.
+
+def load_locomo_dataset(path: Path) -> Dataset:
+    """Load a LoCoMo-MC10 formatted dataset (JSON array or JSONL).
+
+    Supports both formats:
+    - JSON: a single array of question objects
+    - JSONL: one JSON object per line
+
+    Each object has: question_id, question, question_type, choices,
+    correct_choice_index, haystack_sessions, haystack_session_datetimes.
     """
-    raw = json.loads(path.read_text())
+    text = path.read_text()
+
+    # Detect format: JSON array starts with '[', JSONL starts with '{'
+    stripped = text.strip()
+    if stripped.startswith("["):
+        raw = json.loads(text)
+    else:
+        # JSONL: one JSON object per line
+        raw = [json.loads(line) for line in stripped.splitlines() if line.strip()]
 
     conversations: dict[str, Conversation] = {}
     questions: list[Question] = []
@@ -44,15 +59,25 @@ def load_locomo_dataset(path: Path) -> Dataset:
         # Build conversation if we haven't seen this one yet
         if conv_id not in conversations:
             messages: list[Message] = []
-            for session in item.get("haystack_sessions", []):
-                for msg in session:
-                    messages.append(Message(role=msg["role"], content=msg["content"]))
+            session_datetimes = item.get("haystack_session_datetimes", [])
 
-            timestamps = item.get("haystack_session_datetimes", [])
+            for session_idx, session in enumerate(item.get("haystack_sessions", [])):
+                # Get the datetime for this session if available
+                session_dt = ""
+                if session_idx < len(session_datetimes):
+                    session_dt = session_datetimes[session_idx]
+
+                for msg in session:
+                    content = msg["content"]
+                    # Prepend session datetime as context if available
+                    if session_dt:
+                        content = f"[{session_dt}] {content}"
+                    messages.append(Message(role=msg["role"], content=content))
+
             conversations[conv_id] = Conversation(
                 conversation_id=conv_id,
                 messages=messages,
-                timestamps=timestamps if isinstance(timestamps, list) else [],
+                timestamps=session_datetimes if isinstance(session_datetimes, list) else [],
             )
 
         questions.append(
@@ -73,29 +98,6 @@ def load_locomo_dataset(path: Path) -> Dataset:
     )
 
 
-# ── Answer prompt template ──────────────────────────────────────
-
-ANSWER_PROMPT_TEMPLATE = """\
-Context from a conversation (timestamps in brackets, "yesterday" = day before that timestamp):
-{context}
-
-Question: {question}
-
-{choices}
-
-If the answer cannot be determined from the context above, select the choice that says it is not answerable.
-Respond with ONLY the letter of the correct answer. Do not explain.
-Answer:"""
-
-
-def format_context(memories: list[str]) -> str:
-    return "\n".join(f"[{i + 1}] {m}" for i, m in enumerate(memories))
-
-
-def format_choices(choices: list[str]) -> str:
-    return "\n".join(choices)
-
-
 # ── Suite runner ────────────────────────────────────────────────
 
 
@@ -108,20 +110,46 @@ class BaseSuite:
     on which LLM interprets the context.
     """
 
-    def __init__(self, adapter: BaseAdapter, llm_provider: BaseLLMProvider):
+    def __init__(
+        self,
+        adapter: BaseAdapter,
+        llm_provider: BaseLLMProvider,
+        prompt_version: str = "v1",
+    ):
         self.adapter = adapter
         self.llm = llm_provider
+        self.prompt_version = prompt_version
 
-    async def run(self, dataset: Dataset) -> BenchmarkResult:
-        """Execute the full benchmark: reset -> ingest -> recall+answer -> score."""
+    async def run(
+        self, dataset: Dataset, max_questions: int | None = None
+    ) -> BenchmarkResult:
+        """Execute the full benchmark: reset -> ingest -> recall+answer -> score.
+
+        Args:
+            dataset: The loaded benchmark dataset.
+            max_questions: If set, only evaluate this many questions (for quick validation).
+        """
+        questions = dataset.questions
+        if max_questions is not None and max_questions > 0:
+            questions = questions[:max_questions]
+
+        # When limiting questions, only ingest conversations we actually need
+        needed_conv_ids = {q.conversation_id for q in questions}
+        conversations = {
+            cid: conv
+            for cid, conv in dataset.conversations.items()
+            if cid in needed_conv_ids
+        }
 
         console.print(
             f"\n[bold]MNEMONIC Benchmark[/bold]"
-            f"\n  Adapter: [cyan]{self.adapter.name}[/cyan]"
-            f"\n  LLM:     [cyan]{self.llm.name}[/cyan]"
-            f"\n  Dataset: [cyan]{dataset.name}[/cyan]"
-            f"\n  Questions: {len(dataset.questions)}"
-            f"\n  Conversations: {len(dataset.conversations)}\n"
+            f"\n  Adapter:  [cyan]{self.adapter.name}[/cyan]"
+            f"\n  LLM:      [cyan]{self.llm.name}[/cyan]"
+            f"\n  Dataset:  [cyan]{dataset.name}[/cyan]"
+            f"\n  Prompt:   [cyan]{self.prompt_version}[/cyan]"
+            f"\n  Questions: {len(questions)}"
+            + (f" (of {len(dataset.questions)})" if max_questions else "")
+            + f"\n  Conversations: {len(conversations)}\n"
         )
 
         # ── Reset ───────────────────────────────────────────────
@@ -138,9 +166,9 @@ class BaseSuite:
             console=console,
         ) as progress:
             task = progress.add_task(
-                "Ingesting conversations...", total=len(dataset.conversations)
+                "Ingesting conversations...", total=len(conversations)
             )
-            for conv in dataset.conversations.values():
+            for conv in conversations.values():
                 await self.adapter.ingest(conv)
                 progress.advance(task)
 
@@ -158,20 +186,21 @@ class BaseSuite:
             console=console,
         ) as progress:
             task = progress.add_task(
-                "Answering questions...", total=len(dataset.questions)
+                "Answering questions...", total=len(questions)
             )
 
-            for q in dataset.questions:
+            for q in questions:
                 # Recall
                 recall_start = time.perf_counter()
                 memories = await self.adapter.recall(q.conversation_id, q.question)
                 recall_ms = (time.perf_counter() - recall_start) * 1000
 
-                # Build prompt and generate answer
-                context = format_context(memories)
-                choices_str = format_choices(q.choices)
-                prompt = ANSWER_PROMPT_TEMPLATE.format(
-                    context=context, question=q.question, choices=choices_str
+                # Build prompt using versioned template
+                prompt = build_prompt(
+                    memories=memories,
+                    question=q.question,
+                    choices=q.choices,
+                    prompt_version=self.prompt_version,
                 )
 
                 answer_start = time.perf_counter()

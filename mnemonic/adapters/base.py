@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from abc import ABC, abstractmethod
 
-from mnemonic.types import Conversation
+from mnemonic.types import Conversation, RecallResult
 
 
 class BaseAdapter(ABC):
@@ -33,7 +33,7 @@ class BaseAdapter(ABC):
     @abstractmethod
     async def recall(
         self, conversation_id: str, query: str, top_k: int = 20
-    ) -> list[str]:
+    ) -> list[RecallResult]:
         """Retrieve relevant memory fragments for a query.
 
         Args:
@@ -42,7 +42,7 @@ class BaseAdapter(ABC):
             top_k: Maximum number of results to return.
 
         Returns:
-            List of memory content strings, ranked by relevance.
+            List of RecallResult objects, ranked by relevance.
         """
 
     @abstractmethod

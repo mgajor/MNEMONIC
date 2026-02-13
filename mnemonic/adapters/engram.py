@@ -7,11 +7,11 @@ import logging
 import re
 import tempfile
 import time
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 from pathlib import Path
 
 from mnemonic.adapters.base import BaseAdapter
-from mnemonic.types import Conversation
+from mnemonic.types import Conversation, RecallResult
 
 logger = logging.getLogger(__name__)
 
@@ -36,18 +36,18 @@ class EngramConfig:
 # Matches lines like:
 # 1. [0.87] (certain) (Semantic) Alice works at Acme Corp (id: a1b2c3d4, source: Direct)
 _RECALL_LINE_RE = re.compile(
-    r"^\d+\.\s+"  # index
-    r"\[[\d.]+\]\s+"  # score
-    r"\([^)]+\)\s+"  # certainty
-    r"\([^)]+\)\s+"  # kind
-    r"(.+?)\s+"  # content (captured)
-    r"\(id:\s*\w+,\s*source:\s*[^)]+\)$"  # id + source trailer
+    r"^(\d+)\.\s+"  # index
+    r"\[([\d.]+)\]\s+"  # score
+    r"\(([^)]+)\)\s+"  # certainty
+    r"\(([^)]+)\)\s+"  # kind
+    r"(.+?)\s+"  # content
+    r"\(id:\s*(\w+),\s*source:\s*([^)]+)\)$"  # id + source
 )
 
 
-def parse_recall_output(stdout: str) -> list[str]:
-    """Parse engram recall CLI output into a list of memory content strings."""
-    results: list[str] = []
+def parse_recall_output(stdout: str) -> list[RecallResult]:
+    """Parse engram recall CLI output into a list of RecallResult objects."""
+    results: list[RecallResult] = []
     for line in stdout.strip().splitlines():
         line = line.strip()
         if not line:
@@ -55,11 +55,16 @@ def parse_recall_output(stdout: str) -> list[str]:
 
         match = _RECALL_LINE_RE.match(line)
         if match:
-            results.append(match.group(1))
+            results.append(RecallResult(
+                content=match.group(5),
+                score=float(match.group(2)),
+                certainty=match.group(3).lower(),
+                kind=match.group(4).lower(),
+                memory_id=match.group(6),
+                source=match.group(7),
+            ))
         else:
-            # Fallback: if the format doesn't match the regex exactly,
-            # try to extract content between the kind tag and the id trailer.
-            # This handles cases where content itself contains parentheses.
+            # Fallback for lines where content contains parentheses
             fallback = _parse_recall_line_fallback(line)
             if fallback:
                 results.append(fallback)
@@ -67,34 +72,60 @@ def parse_recall_output(stdout: str) -> list[str]:
     return results
 
 
-def _parse_recall_line_fallback(line: str) -> str | None:
+def _parse_recall_line_fallback(line: str) -> RecallResult | None:
     """Fallback parser for recall lines that don't match the strict regex.
 
-    Strategy: find the third ')' (after score, certainty, kind) and the
-    last '(id:' marker, and extract everything in between.
+    Strategy: extract score/certainty/kind from the known prefix structure,
+    then find content between the kind tag and the last '(id:' marker.
     """
     # Find "(id:" marker near the end
     id_marker = line.rfind("(id:")
     if id_marker == -1:
         return None
 
-    # Find the content start: after the second closing paren
-    # Format: {index}. [{score}] ({certainty}) ({kind}) {content} (id: ...)
-    # The brackets [] don't count — only the two (...) groups before content.
-    paren_count = 0
+    # Extract id and source from trailer
+    trailer = line[id_marker:]
+    trailer_match = re.match(r"\(id:\s*(\w+),\s*source:\s*([^)]+)\)", trailer)
+    id_str = trailer_match.group(1) if trailer_match else ""
+    source_str = trailer_match.group(2) if trailer_match else ""
+
+    # Extract score from [X.XX]
+    score_match = re.search(r"\[([\d.]+)\]", line)
+    score = float(score_match.group(1)) if score_match else 0.0
+
+    # Extract certainty and kind from the two (...) groups
+    paren_groups: list[str] = []
     content_start = -1
-    for i, ch in enumerate(line):
-        if ch == ")":
+    paren_count = 0
+    i = 0
+    while i < len(line) and paren_count < 2:
+        if line[i] == "(":
+            close = line.index(")", i)
+            paren_groups.append(line[i + 1 : close])
             paren_count += 1
-            if paren_count == 2:
-                content_start = i + 1
-                break
+            content_start = close + 1
+            i = close + 1
+        else:
+            i += 1
 
     if content_start == -1 or content_start >= id_marker:
         return None
 
+    certainty = paren_groups[0].lower() if len(paren_groups) > 0 else ""
+    kind = paren_groups[1].lower() if len(paren_groups) > 1 else ""
     content = line[content_start:id_marker].strip()
-    return content if content else None
+
+    if not content:
+        return None
+
+    return RecallResult(
+        content=content,
+        score=score,
+        certainty=certainty,
+        kind=kind,
+        memory_id=id_str,
+        source=source_str,
+    )
 
 
 # ── Adapter ────────────────────────────────────────────────────
@@ -178,7 +209,7 @@ class EngramAdapter(BaseAdapter):
 
     async def recall(
         self, conversation_id: str, query: str, top_k: int = 20
-    ) -> list[str]:
+    ) -> list[RecallResult]:
         """Retrieve relevant memories from engram via semantic recall."""
         stdout, _, _ = await self._run(
             conversation_id, "recall", query, "--limit", str(top_k)

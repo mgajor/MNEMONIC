@@ -88,9 +88,11 @@ def _build_llm(name: str, **kwargs):
 def run(
     adapter: str = typer.Option(..., "--adapter", "-a", help="Memory system adapter name (e.g. engram)"),
     llm: str = typer.Option(..., "--llm", "-l", help="LLM provider name (e.g. openai, ollama)"),
-    dataset: Path = typer.Option(..., "--dataset", "-d", help="Path to dataset JSON file"),
+    dataset: Path = typer.Option(..., "--dataset", "-d", help="Path to dataset JSON/JSONL file"),
     model: str = typer.Option("openai/gpt-4o-mini", "--model", "-m", help="Model name for the LLM provider"),
     top_k: int = typer.Option(20, "--top-k", "-k", help="Number of memories to retrieve per query"),
+    prompt_version: str = typer.Option("v1", "--prompt-version", "-p", help="Prompt template version (v1=basic, v2=enriched metadata)"),
+    max_questions: Optional[int] = typer.Option(None, "--max-questions", "-n", help="Limit number of questions (for quick validation)"),
     api_key: Optional[str] = typer.Option(None, "--api-key", envvar="OPENROUTER_API_KEY", help="API key (or set OPENROUTER_API_KEY env var)"),
     api_base: str = typer.Option("https://openrouter.ai/api/v1", "--api-base", help="Base URL for OpenAI-compatible API"),
     engram_binary: str = typer.Option("engram-mcp", "--engram-binary", help="Path to engram-mcp binary"),
@@ -98,8 +100,15 @@ def run(
     embed_model: str = typer.Option("mxbai-embed-large", "--embed-model", help="Embedding model for engram"),
 ) -> None:
     """Run the benchmark suite against a memory system."""
+    from mnemonic.prompts import PROMPT_VERSIONS
+
     if not dataset.exists():
         console.print(f"[red]Error:[/red] Dataset not found: {dataset}")
+        raise typer.Exit(1)
+
+    if prompt_version not in PROMPT_VERSIONS:
+        console.print(f"[red]Error:[/red] Unknown prompt version: {prompt_version}")
+        console.print(f"Available: {', '.join(sorted(PROMPT_VERSIONS))}")
         raise typer.Exit(1)
 
     if llm == "openai" and not api_key:
@@ -123,17 +132,18 @@ def run(
         ollama_url=ollama_url,
     )
 
-    # Load dataset
+    # Load dataset and run
     from mnemonic.suites.base import BaseSuite, load_locomo_dataset
     from mnemonic.scoring.scorer import Scorer
 
     ds = load_locomo_dataset(dataset)
-    suite = BaseSuite(adapter=adapter_instance, llm_provider=llm_instance)
+    suite = BaseSuite(
+        adapter=adapter_instance,
+        llm_provider=llm_instance,
+        prompt_version=prompt_version,
+    )
 
-    # Run benchmark
-    result = asyncio.run(suite.run(ds))
-
-    # Print results
+    result = asyncio.run(suite.run(ds, max_questions=max_questions))
     Scorer.print_report(result)
 
 

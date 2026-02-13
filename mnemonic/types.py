@@ -46,6 +46,21 @@ class Dataset:
         return {q.question_type for q in self.questions}
 
 
+# ── Recall models ──────────────────────────────────────────────
+
+
+@dataclass
+class RecallResult:
+    """A single memory fragment returned by an adapter's recall method."""
+
+    content: str
+    score: float = 0.0
+    certainty: str = ""  # "certain", "likely", "vague", "uncertain"
+    kind: str = ""  # "episodic", "semantic", "procedural", "prospective"
+    source: str = ""  # "Direct", "Consolidated", "Inferred", "Derived"
+    memory_id: str = ""
+
+
 # ── Result models ───────────────────────────────────────────────
 
 
