@@ -148,7 +148,7 @@ class EngramAdapter(BaseAdapter):
                     f.write(line + "\n")
 
             stdout, stderr, rc = await self._run(
-                namespace, "batch-observe", str(jsonl_path), "--lifecycle",
+                namespace, "batch-observe", str(jsonl_path),
             )
 
             # Parse the JSON summary from stdout
