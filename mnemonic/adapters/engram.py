@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+import json
 import logging
 import re
 import tempfile
@@ -122,44 +123,44 @@ class EngramAdapter(BaseAdapter):
     async def ingest(
         self, conversation: Conversation, concurrency: int = 1
     ) -> dict:
-        """Ingest a conversation by observing each message in its namespace.
+        """Ingest a conversation via batch-observe (single engine session).
+
+        Writes all messages to a temp JSONL file, then calls
+        ``engram-mcp batch-observe <file> --lifecycle`` once. This avoids
+        cold-booting the engine per message.
 
         Args:
             conversation: The conversation to ingest.
-            concurrency: Max concurrent observe calls (default 1 = sequential).
+            concurrency: Ignored (kept for API compatibility).
         """
         namespace = conversation.conversation_id
         self._namespaces.add(namespace)
 
         start = time.perf_counter()
-        ingested = 0
 
-        if concurrency <= 1:
-            # Sequential mode
-            for msg in conversation.messages:
-                role = msg.role if msg.role in ("user", "assistant") else "observation"
-                _, _, rc = await self._run(
-                    namespace, "observe", msg.content, "--role", role
-                )
-                if rc == 0:
-                    ingested += 1
-        else:
-            # Concurrent mode — parallelize observe calls with semaphore
-            sem = asyncio.Semaphore(concurrency)
-            results: list[int] = []
-
-            async def _observe(msg):
-                async with sem:
+        # Write JSONL temp file
+        jsonl_path = Path(tempfile.mktemp(suffix=".jsonl", prefix="engram_batch_"))
+        try:
+            with open(jsonl_path, "w") as f:
+                for msg in conversation.messages:
                     role = msg.role if msg.role in ("user", "assistant") else "observation"
-                    _, _, rc = await self._run(
-                        namespace, "observe", msg.content, "--role", role
-                    )
-                    return rc
+                    line = json.dumps({"content": msg.content, "role": role})
+                    f.write(line + "\n")
 
-            rcs = await asyncio.gather(
-                *(_observe(msg) for msg in conversation.messages)
+            stdout, stderr, rc = await self._run(
+                namespace, "batch-observe", str(jsonl_path), "--lifecycle",
             )
-            ingested = sum(1 for rc in rcs if rc == 0)
+
+            # Parse the JSON summary from stdout
+            ingested = 0
+            if rc == 0 and stdout.strip():
+                try:
+                    summary = json.loads(stdout)
+                    ingested = summary.get("memories_created", 0)
+                except json.JSONDecodeError:
+                    logger.warning("Failed to parse batch-observe summary: %s", stdout[:200])
+        finally:
+            jsonl_path.unlink(missing_ok=True)
 
         duration_ms = (time.perf_counter() - start) * 1000
 
