@@ -44,6 +44,9 @@ def _build_adapter(name: str, **kwargs):
             ollama_url=kwargs.get("ollama_url", "http://localhost:11434"),
             embed_model=kwargs.get("embed_model", "mxbai-embed-large"),
             top_k=kwargs.get("top_k", 20),
+            build_relations=kwargs.get("build_relations", False),
+            rich_recall=kwargs.get("rich_recall", False),
+            chain_depth=kwargs.get("chain_depth", 3),
         )
         return EngramAdapter(config=cfg)
 
@@ -99,6 +102,10 @@ def run(
     ollama_url: str = typer.Option("http://localhost:11434", "--ollama-url", help="Ollama server URL"),
     embed_model: str = typer.Option("mxbai-embed-large", "--embed-model", help="Embedding model for engram"),
     concurrency: int = typer.Option(10, "--concurrency", "-c", help="Number of concurrent streams for ingest and answering"),
+    build_relations: bool = typer.Option(False, "--build-relations", help="Build Precedes + semantic RelatedTo relations during ingest"),
+    rich_recall: bool = typer.Option(False, "--rich-recall", help="Use rich recall output with dates and corroboration metadata"),
+    chain_depth: int = typer.Option(0, "--chain-depth", help="Chain recall depth (0=disabled, 3=default)"),
+    use_intent: bool = typer.Option(False, "--use-intent", help="Send query intent hints (temporal, factual, etc.) per question category"),
 ) -> None:
     """Run the benchmark suite against a memory system."""
     from mnemonic.prompts import PROMPT_VERSIONS
@@ -123,6 +130,9 @@ def run(
         ollama_url=ollama_url,
         embed_model=embed_model,
         top_k=top_k,
+        build_relations=build_relations,
+        rich_recall=rich_recall,
+        chain_depth=chain_depth,
     )
 
     llm_instance = _build_llm(
@@ -143,6 +153,8 @@ def run(
         llm_provider=llm_instance,
         prompt_version=prompt_version,
         concurrency=concurrency,
+        top_k=top_k,
+        use_intent=use_intent,
     )
 
     result = asyncio.run(suite.run(ds, max_questions=max_questions))

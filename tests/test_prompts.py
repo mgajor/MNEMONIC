@@ -35,15 +35,15 @@ def test_format_context_v1() -> None:
 
 def test_format_context_v2() -> None:
     ctx = format_context_v2(SAMPLE_MEMORIES)
-    # v2 should include metadata tags
+    # v2 should include certainty metadata
     assert "[1]" in ctx
     assert "certain" in ctx
-    assert "direct" in ctx
-    assert "semantic" in ctx
+    # "Direct" source is omitted (default) — only non-direct sources shown
     assert "Alice works at Acme Corp" in ctx
 
     assert "[2]" in ctx
     assert "likely" in ctx
+    assert "consolidated" in ctx  # non-direct source shown
     assert "Bob moved to Seattle" in ctx
 
 
@@ -70,9 +70,9 @@ def test_build_prompt_v2() -> None:
         prompt_version="v2",
     )
     assert "Where does Alice work?" in prompt
-    assert "Certainty tags" in prompt
+    assert "dates in brackets" in prompt
+    assert "temporal order" in prompt
     assert "certain" in prompt
-    assert "direct" in prompt
 
 
 def test_build_prompt_defaults_to_v1() -> None:

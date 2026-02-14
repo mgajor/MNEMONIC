@@ -35,7 +35,8 @@ class BaseAdapter(ABC):
 
     @abstractmethod
     async def recall(
-        self, conversation_id: str, query: str, top_k: int = 20
+        self, conversation_id: str, query: str, top_k: int = 20,
+        intent: str | None = None,
     ) -> list[RecallResult]:
         """Retrieve relevant memory fragments for a query.
 
@@ -43,6 +44,7 @@ class BaseAdapter(ABC):
             conversation_id: Scope recall to this conversation's namespace.
             query: The question or search text.
             top_k: Maximum number of results to return.
+            intent: Optional query intent hint (factual, temporal, general, etc.).
 
         Returns:
             List of RecallResult objects, ranked by relevance.

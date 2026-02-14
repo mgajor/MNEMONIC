@@ -33,36 +33,32 @@ def format_context_v1(memories: list[RecallResult]) -> str:
 # ── v2: Enriched metadata prompt ───────────────────────────────
 
 V2_TEMPLATE = """\
-Context from a conversation. Each memory includes metadata:
-- Dates in [brackets] indicate when events occurred; "yesterday" = day before that date
-- Certainty tags: [certain], [likely], [vague] indicate reliability
-- Source tags: [direct], [consolidated], [inferred] indicate how the memory was formed
-
+Context from a conversation (dates in brackets show when each fact was stated; \
+"yesterday" = day before that date; certainty tags indicate reliability):
 {context}
 
 Question: {question}
 
 {choices}
 
+Use the dates to reason about temporal order. Prefer higher-certainty memories.
 If the answer cannot be determined from the context above, select the choice that says it is not answerable.
 Respond with ONLY the letter of the correct answer. Do not explain.
 Answer:"""
 
 
 def format_context_v2(memories: list[RecallResult]) -> str:
-    """v2: Enriched context with certainty, kind, and source metadata."""
+    """v2: Enriched context with certainty and source metadata."""
     lines: list[str] = []
     for i, m in enumerate(memories):
-        tags: list[str] = []
+        meta: list[str] = []
         if m.certainty:
-            tags.append(m.certainty)
-        if m.source:
-            tags.append(m.source.lower())
-        if m.kind:
-            tags.append(m.kind)
+            meta.append(m.certainty)
+        if m.source and m.source.lower() not in ("direct", "unknown"):
+            meta.append(m.source.lower())
 
-        tag_str = f" [{', '.join(tags)}]" if tags else ""
-        lines.append(f"[{i + 1}]{tag_str} {m.content}")
+        meta_str = f" ({', '.join(meta)})" if meta else ""
+        lines.append(f"[{i + 1}]{meta_str} {m.content}")
 
     return "\n".join(lines)
 

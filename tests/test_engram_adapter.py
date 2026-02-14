@@ -31,7 +31,16 @@ def test_custom_config() -> None:
     assert cfg.top_k == 10
 
 
-# ── Recall parser tests ────────────────────────────────────────
+def test_config_relation_defaults() -> None:
+    cfg = EngramConfig()
+    assert cfg.build_relations is False
+    assert cfg.sim_threshold == 0.75
+    assert cfg.sim_top_k == 5
+    assert cfg.chain_depth == 3
+    assert cfg.rich_recall is False
+
+
+# ── Recall parser tests (standard format) ────────────────────
 
 # Matches actual engram-mcp recall output format:
 # [score|certainty|source|kind] content
@@ -98,21 +107,64 @@ another junk line
     assert results[0].content == "Real memory content"
 
 
+# ── Recall parser tests (rich format) ────────────────────────
+
+
+SAMPLE_RICH_OUTPUT = """\
+[0.87|certain|Direct|Semantic] [2023-05-15] [3x confirmed] Alice works at Acme Corp
+[0.74|likely|Consolidated|Episodic] [2023-06-01] [0x confirmed] Bob moved to Seattle
+[0.61|vague|Inferred|Procedural] They discussed the review process
+"""
+
+
+def test_parse_rich_recall_with_date_and_corroboration() -> None:
+    results = parse_recall_output(SAMPLE_RICH_OUTPUT, rich=True)
+    assert len(results) == 3
+
+    # Date and corroboration > 1 prepended to content
+    assert results[0].content == "[2023-05-15] [3x confirmed] Alice works at Acme Corp"
+    assert results[0].score == 0.87
+    assert results[0].certainty == "certain"
+
+    # 0x confirmed is not prepended (not > 1)
+    assert results[1].content == "[2023-06-01] Bob moved to Seattle"
+    assert results[1].score == 0.74
+
+    # No date or corroboration — plain content
+    assert results[2].content == "They discussed the review process"
+
+
+def test_parse_rich_recall_date_only() -> None:
+    line = "[0.90|certain|Direct|Semantic] [2023-05-20] Something happened"
+    results = parse_recall_output(line, rich=True)
+    assert len(results) == 1
+    assert results[0].content == "[2023-05-20] Something happened"
+
+
+def test_parse_rich_recall_no_metadata() -> None:
+    """Rich parser should still work on lines without date/corroboration."""
+    line = "[0.70|certain|Direct|Semantic] Plain content here"
+    results = parse_recall_output(line, rich=True)
+    assert len(results) == 1
+    assert results[0].content == "Plain content here"
+
+
 # ── Adapter structure tests ─────────────────────────────────────
 
 
 def test_adapter_has_required_attributes() -> None:
     adapter = EngramAdapter()
     assert adapter.name == "engram"
-    assert adapter.version == "0.1.0"
+    assert adapter.version == "0.2.0"
 
 
-def test_adapter_base_args() -> None:
+def test_adapter_base_args_include_chain_params() -> None:
     cfg = EngramConfig(
         binary_path="/path/to/engram-mcp",
         db_path="/tmp/test.db",
         ollama_url="http://localhost:11434",
         embed_model="mxbai-embed-large",
+        chain_depth=5,
     )
     adapter = EngramAdapter(config=cfg)
     args = adapter._base_args("conv-42")
@@ -122,8 +174,10 @@ def test_adapter_base_args() -> None:
     assert "/tmp/test.db" in args
     assert "--namespace" in args
     assert "conv-42" in args
-    assert "--ollama-url" in args
-    assert "--embed-model" in args
+    assert "--chain-depth" in args
+    assert "5" in args
+    assert "--chain-decay-temporal" in args
+    assert "--chain-decay-semantic" in args
 
 
 @pytest.mark.asyncio

@@ -111,26 +111,58 @@ class BaseSuite:
     on which LLM interprets the context.
     """
 
+    # Category-specific top_k multipliers (matches engram-locomo v2).
+    # temporal_reasoning needs more context for date ordering;
+    # multi_hop needs broader coverage; adversarial benefits from less noise.
+    TOP_K_MULTIPLIERS: dict[str, float] = {
+        "temporal_reasoning": 1.5,
+        "multi_hop": 1.25,
+        "adversarial": 0.75,
+    }
+
+    # Category → query intent hint for engram recall_with_intent.
+    INTENT_MAP: dict[str, str] = {
+        "temporal_reasoning": "temporal",
+        "single_hop": "factual",
+        "open_domain": "general",
+        "adversarial": "factual",
+        # multi_hop: omitted → auto-detect (heuristic outperforms blanket hint)
+    }
+
     def __init__(
         self,
         adapter: BaseAdapter,
         llm_provider: BaseLLMProvider,
         prompt_version: str = "v1",
         concurrency: int = 1,
+        top_k: int = 20,
+        use_intent: bool = False,
     ):
         self.adapter = adapter
         self.llm = llm_provider
         self.prompt_version = prompt_version
         self.concurrency = max(1, concurrency)
+        self.top_k = top_k
+        self.use_intent = use_intent
+
+    def _effective_top_k(self, question_type: str) -> int:
+        """Compute dynamic top_k based on question category."""
+        multiplier = self.TOP_K_MULTIPLIERS.get(question_type, 1.0)
+        return max(5, round(self.top_k * multiplier))
 
     async def _answer_question(
         self, q: Question, sem: asyncio.Semaphore,
     ) -> QuestionResult:
         """Answer a single question (with semaphore for concurrency control)."""
         async with sem:
-            # Recall
+            # Recall with category-aware top_k and optional intent hint
+            effective_k = self._effective_top_k(q.question_type)
+            intent = self.INTENT_MAP.get(q.question_type) if self.use_intent else None
             recall_start = time.perf_counter()
-            memories = await self.adapter.recall(q.conversation_id, q.question)
+            memories = await self.adapter.recall(
+                q.conversation_id, q.question, top_k=effective_k,
+                intent=intent,
+            )
             recall_ms = (time.perf_counter() - recall_start) * 1000
 
             # Build prompt using versioned template
