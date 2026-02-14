@@ -98,6 +98,7 @@ def run(
     engram_binary: str = typer.Option("engram-mcp", "--engram-binary", help="Path to engram-mcp binary"),
     ollama_url: str = typer.Option("http://localhost:11434", "--ollama-url", help="Ollama server URL"),
     embed_model: str = typer.Option("mxbai-embed-large", "--embed-model", help="Embedding model for engram"),
+    concurrency: int = typer.Option(10, "--concurrency", "-c", help="Number of concurrent streams for ingest and answering"),
 ) -> None:
     """Run the benchmark suite against a memory system."""
     from mnemonic.prompts import PROMPT_VERSIONS
@@ -141,6 +142,7 @@ def run(
         adapter=adapter_instance,
         llm_provider=llm_instance,
         prompt_version=prompt_version,
+        concurrency=concurrency,
     )
 
     result = asyncio.run(suite.run(ds, max_questions=max_questions))

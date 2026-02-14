@@ -20,11 +20,14 @@ class BaseAdapter(ABC):
     version: str
 
     @abstractmethod
-    async def ingest(self, conversation: Conversation) -> dict:
+    async def ingest(
+        self, conversation: Conversation, concurrency: int = 1
+    ) -> dict:
         """Ingest a full conversation into the memory system.
 
         Args:
             conversation: A Conversation with id, messages, and optional timestamps.
+            concurrency: Max concurrent operations (default 1 = sequential).
 
         Returns:
             Dict with ingest metadata (e.g. message_count, duration_ms).

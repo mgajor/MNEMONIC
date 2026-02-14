@@ -119,21 +119,47 @@ class EngramAdapter(BaseAdapter):
 
         return stdout, stderr, proc.returncode
 
-    async def ingest(self, conversation: Conversation) -> dict:
-        """Ingest a conversation by observing each message in its namespace."""
+    async def ingest(
+        self, conversation: Conversation, concurrency: int = 1
+    ) -> dict:
+        """Ingest a conversation by observing each message in its namespace.
+
+        Args:
+            conversation: The conversation to ingest.
+            concurrency: Max concurrent observe calls (default 1 = sequential).
+        """
         namespace = conversation.conversation_id
         self._namespaces.add(namespace)
 
         start = time.perf_counter()
         ingested = 0
 
-        for msg in conversation.messages:
-            role = msg.role if msg.role in ("user", "assistant") else "observation"
-            _, _, rc = await self._run(
-                namespace, "observe", msg.content, "--role", role
+        if concurrency <= 1:
+            # Sequential mode
+            for msg in conversation.messages:
+                role = msg.role if msg.role in ("user", "assistant") else "observation"
+                _, _, rc = await self._run(
+                    namespace, "observe", msg.content, "--role", role
+                )
+                if rc == 0:
+                    ingested += 1
+        else:
+            # Concurrent mode — parallelize observe calls with semaphore
+            sem = asyncio.Semaphore(concurrency)
+            results: list[int] = []
+
+            async def _observe(msg):
+                async with sem:
+                    role = msg.role if msg.role in ("user", "assistant") else "observation"
+                    _, _, rc = await self._run(
+                        namespace, "observe", msg.content, "--role", role
+                    )
+                    return rc
+
+            rcs = await asyncio.gather(
+                *(_observe(msg) for msg in conversation.messages)
             )
-            if rc == 0:
-                ingested += 1
+            ingested = sum(1 for rc in rcs if rc == 0)
 
         duration_ms = (time.perf_counter() - start) * 1000
 

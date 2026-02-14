@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import asyncio
 import json
 import time
 from pathlib import Path
@@ -115,10 +116,50 @@ class BaseSuite:
         adapter: BaseAdapter,
         llm_provider: BaseLLMProvider,
         prompt_version: str = "v1",
+        concurrency: int = 1,
     ):
         self.adapter = adapter
         self.llm = llm_provider
         self.prompt_version = prompt_version
+        self.concurrency = max(1, concurrency)
+
+    async def _answer_question(
+        self, q: Question, sem: asyncio.Semaphore,
+    ) -> QuestionResult:
+        """Answer a single question (with semaphore for concurrency control)."""
+        async with sem:
+            # Recall
+            recall_start = time.perf_counter()
+            memories = await self.adapter.recall(q.conversation_id, q.question)
+            recall_ms = (time.perf_counter() - recall_start) * 1000
+
+            # Build prompt using versioned template
+            prompt = build_prompt(
+                memories=memories,
+                question=q.question,
+                choices=q.choices,
+                prompt_version=self.prompt_version,
+            )
+
+            answer_start = time.perf_counter()
+            predicted = await self.llm.generate_answer(
+                context=prompt, question=q.question, choices=q.choices
+            )
+            answer_ms = (time.perf_counter() - answer_start) * 1000
+
+            # Normalize predicted answer to single letter
+            predicted_letter = predicted.strip().upper()[:1]
+            correct_letter = q.correct_letter
+
+            return QuestionResult(
+                question_id=q.question_id,
+                question_type=q.question_type,
+                predicted=predicted_letter,
+                correct=correct_letter,
+                is_correct=(predicted_letter == correct_letter),
+                recall_ms=recall_ms,
+                answer_ms=answer_ms,
+            )
 
     async def run(
         self, dataset: Dataset, max_questions: int | None = None
@@ -147,6 +188,7 @@ class BaseSuite:
             f"\n  LLM:      [cyan]{self.llm.name}[/cyan]"
             f"\n  Dataset:  [cyan]{dataset.name}[/cyan]"
             f"\n  Prompt:   [cyan]{self.prompt_version}[/cyan]"
+            f"\n  Concurrency: [cyan]{self.concurrency}[/cyan]"
             f"\n  Questions: {len(questions)}"
             + (f" (of {len(dataset.questions)})" if max_questions else "")
             + f"\n  Conversations: {len(conversations)}\n"
@@ -169,63 +211,47 @@ class BaseSuite:
                 "Ingesting conversations...", total=len(conversations)
             )
             for conv in conversations.values():
-                await self.adapter.ingest(conv)
+                await self.adapter.ingest(conv, concurrency=self.concurrency)
                 progress.advance(task)
 
         ingest_total_ms = (time.perf_counter() - ingest_start) * 1000
         console.print(f"  Ingest complete: {ingest_total_ms:.0f}ms total\n")
 
         # ── Recall + Answer phase ──────────────────────────────
-        question_results: list[QuestionResult] = []
+        sem = asyncio.Semaphore(self.concurrency)
 
-        with Progress(
-            SpinnerColumn(),
-            TextColumn("[progress.description]{task.description}"),
-            BarColumn(),
-            TaskProgressColumn(),
-            console=console,
-        ) as progress:
-            task = progress.add_task(
-                "Answering questions...", total=len(questions)
+        if self.concurrency <= 1:
+            # Sequential mode — shows nice progress
+            question_results: list[QuestionResult] = []
+            with Progress(
+                SpinnerColumn(),
+                TextColumn("[progress.description]{task.description}"),
+                BarColumn(),
+                TaskProgressColumn(),
+                console=console,
+            ) as progress:
+                ptask = progress.add_task(
+                    "Answering questions...", total=len(questions)
+                )
+                for q in questions:
+                    result = await self._answer_question(q, sem)
+                    question_results.append(result)
+                    progress.advance(ptask)
+        else:
+            # Concurrent mode — gather all at once
+            console.print(
+                f"  Answering {len(questions)} questions "
+                f"({self.concurrency} concurrent)..."
             )
 
-            for q in questions:
-                # Recall
-                recall_start = time.perf_counter()
-                memories = await self.adapter.recall(q.conversation_id, q.question)
-                recall_ms = (time.perf_counter() - recall_start) * 1000
+            async def _tracked_answer(q: Question) -> QuestionResult:
+                result = await self._answer_question(q, sem)
+                return result
 
-                # Build prompt using versioned template
-                prompt = build_prompt(
-                    memories=memories,
-                    question=q.question,
-                    choices=q.choices,
-                    prompt_version=self.prompt_version,
-                )
-
-                answer_start = time.perf_counter()
-                predicted = await self.llm.generate_answer(
-                    context=prompt, question=q.question, choices=q.choices
-                )
-                answer_ms = (time.perf_counter() - answer_start) * 1000
-
-                # Normalize predicted answer to single letter
-                predicted_letter = predicted.strip().upper()[:1]
-                correct_letter = q.correct_letter
-
-                question_results.append(
-                    QuestionResult(
-                        question_id=q.question_id,
-                        question_type=q.question_type,
-                        predicted=predicted_letter,
-                        correct=correct_letter,
-                        is_correct=(predicted_letter == correct_letter),
-                        recall_ms=recall_ms,
-                        answer_ms=answer_ms,
-                    )
-                )
-
-                progress.advance(task)
+            question_results = list(await asyncio.gather(
+                *(_tracked_answer(q) for q in questions)
+            ))
+            console.print(f"  Answering complete.\n")
 
         # ── Score ──────────────────────────────────────────────
         result = Scorer.compute(
