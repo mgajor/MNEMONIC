@@ -34,9 +34,11 @@ def test_custom_config() -> None:
 def test_config_relation_defaults() -> None:
     cfg = EngramConfig()
     assert cfg.build_relations is False
+    assert cfg.run_lifecycle is False
+    assert cfg.llm_extract is False
     assert cfg.sim_threshold == 0.75
     assert cfg.sim_top_k == 5
-    assert cfg.chain_depth == 3
+    assert cfg.chain_depth == 0  # disabled by default (A/B tests showed regression)
     assert cfg.rich_recall is False
 
 

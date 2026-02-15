@@ -45,8 +45,10 @@ def _build_adapter(name: str, **kwargs):
             embed_model=kwargs.get("embed_model", "mxbai-embed-large"),
             top_k=kwargs.get("top_k", 20),
             build_relations=kwargs.get("build_relations", False),
+            run_lifecycle=kwargs.get("run_lifecycle", False),
+            llm_extract=kwargs.get("llm_extract", False),
             rich_recall=kwargs.get("rich_recall", False),
-            chain_depth=kwargs.get("chain_depth", 3),
+            chain_depth=kwargs.get("chain_depth", 0),
         )
         return EngramAdapter(config=cfg)
 
@@ -103,6 +105,8 @@ def run(
     embed_model: str = typer.Option("mxbai-embed-large", "--embed-model", help="Embedding model for engram"),
     concurrency: int = typer.Option(10, "--concurrency", "-c", help="Number of concurrent streams for ingest and answering"),
     build_relations: bool = typer.Option(False, "--build-relations", help="Build Precedes + semantic RelatedTo relations during ingest"),
+    run_lifecycle: bool = typer.Option(False, "--run-lifecycle", help="Run lifecycle (schemas, consolidation, fact extraction) after ingest"),
+    llm_extract: bool = typer.Option(False, "--llm-extract", help="Enable LLM-powered fact extraction in lifecycle phase"),
     rich_recall: bool = typer.Option(False, "--rich-recall", help="Use rich recall output with dates and corroboration metadata"),
     chain_depth: int = typer.Option(0, "--chain-depth", help="Chain recall depth (0=disabled, 3=default)"),
     use_intent: bool = typer.Option(False, "--use-intent", help="Send query intent hints (temporal, factual, etc.) per question category"),
@@ -131,6 +135,8 @@ def run(
         embed_model=embed_model,
         top_k=top_k,
         build_relations=build_relations,
+        run_lifecycle=run_lifecycle,
+        llm_extract=llm_extract,
         rich_recall=rich_recall,
         chain_depth=chain_depth,
     )

@@ -33,10 +33,14 @@ class EngramConfig:
     sim_top_k: int = 5
 
     # Chain recall parameters (global engine config)
-    chain_depth: int = 3
+    chain_depth: int = 0  # 0 = disabled (A/B tests showed -12.5pp regression)
     chain_decay_temporal: float = 0.85
     chain_decay_semantic: float = 0.75
     chain_relevance_floor: float = 0.2
+
+    # Post-ingest lifecycle (schemas, consolidation, fact extraction)
+    run_lifecycle: bool = False
+    llm_extract: bool = False  # LLM-powered fact extraction in lifecycle
 
     # Recall enrichment
     rich_recall: bool = False  # --rich flag for dates/corroboration in output
@@ -140,6 +144,8 @@ class EngramAdapter(BaseAdapter):
             "--chain-decay-semantic", str(self.config.chain_decay_semantic),
             "--chain-relevance-floor", str(self.config.chain_relevance_floor),
         ]
+        if self.config.llm_extract:
+            args.extend(["--llm-extract", "--llm-extract-model", "llama3.2"])
         return args
 
     async def _run(
@@ -220,6 +226,12 @@ class EngramAdapter(BaseAdapter):
                     logger.warning("Failed to parse batch-observe summary: %s", stdout[:200])
         finally:
             jsonl_path.unlink(missing_ok=True)
+
+        # Run lifecycle as a separate step (schemas, consolidation, fact extraction)
+        # Note: --llm-extract is a global engine flag passed via _base_args(),
+        # not a lifecycle subcommand flag.
+        if self.config.run_lifecycle:
+            await self._run(namespace, "lifecycle")
 
         duration_ms = (time.perf_counter() - start) * 1000
 
