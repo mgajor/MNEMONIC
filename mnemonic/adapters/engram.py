@@ -209,6 +209,8 @@ class EngramAdapter(BaseAdapter):
                     "--sim-threshold", str(self.config.sim_threshold),
                     "--sim-top-k", str(self.config.sim_top_k),
                 ])
+            if self.config.run_lifecycle:
+                batch_args.append("--lifecycle")  # inline in same engine session
 
             stdout, stderr, rc = await self._run(
                 namespace, "batch-observe", *batch_args,
@@ -227,11 +229,9 @@ class EngramAdapter(BaseAdapter):
         finally:
             jsonl_path.unlink(missing_ok=True)
 
-        # Run lifecycle as a separate step (schemas, consolidation, fact extraction)
-        # Note: --llm-extract is a global engine flag passed via _base_args(),
-        # not a lifecycle subcommand flag.
-        if self.config.run_lifecycle:
-            await self._run(namespace, "lifecycle")
+        # Note: lifecycle is now run inline via batch-observe --lifecycle
+        # (same engine session, memories still warm in memory).
+        # --llm-extract is a global engine flag passed via _base_args().
 
         duration_ms = (time.perf_counter() - start) * 1000
 
